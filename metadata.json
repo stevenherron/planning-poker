@@ -1,0 +1,6 @@
+{
+  "name": "AA - Planning Poker Tool ",
+  "description": "A real-time Planning Poker application for agile teams to estimate tasks collaboratively. This tool is built as a single, self-contained HTML file using vanilla JavaScript and Firebase for real-time data synchronization. It allows for customizable card decks and requires no build step to run.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}

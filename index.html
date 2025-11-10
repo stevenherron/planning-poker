@@ -1,0 +1,1716 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Planning Poker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-primary': '#4f46e5',
+                        'brand-secondary': '#7c3aed',
+                        'dark-bg': '#111827',
+                        'dark-surface': '#1f2937',
+                        'dark-border': '#374151',
+                        'dark-text': '#d1d5db',
+                        'dark-text-secondary': '#9ca3af',
+                    },
+                },
+            },
+        };
+    </script>
+    <style>
+        body {
+            background-color: #111827; /* Fallback, same as dark-bg */
+            background-image: radial-gradient(circle at 1% 1%, hsla(243, 80%, 58%, 0.15) 0px, transparent 40%),
+                              radial-gradient(circle at 99% 99%, hsla(262, 83%, 61%, 0.15) 0px, transparent 40%);
+            background-attachment: fixed;
+        }
+        .perspective-1000 { perspective: 1000px; }
+        .card-flipper { transition: transform 0.6s; transform-style: preserve-3d; }
+        .card-flipper.is-flipped { transform: rotateY(180deg); }
+        .card-front, .card-back { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+        .card-back { transform: rotateY(180deg); }
+
+        .view {
+            transition: opacity 0.4s ease-in-out, visibility 0s linear 0s;
+            opacity: 1;
+            visibility: visible;
+            width: 100%;
+        }
+        .view.hidden-view {
+            opacity: 0;
+            visibility: hidden;
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none; /* prevent interaction when hidden */
+            transition: opacity 0.4s ease-in-out, visibility 0s linear 0.4s;
+        }
+
+        .hidden { display: none; }
+        /* Make grid columns equal height */
+        .grid { align-items: stretch; }
+        .lang-btn.active {
+            font-weight: bold;
+            color: #4f46e5; /* brand-primary */
+        }
+        .sidebar-tab {
+            flex: 1;
+            padding: 0.6rem 0.5rem;
+            text-align: center;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s, color 0.2s;
+            color: #9ca3af; /* dark-text-secondary */
+            font-size: 0.875rem;
+        }
+        .sidebar-tab:hover {
+            background-color: #374151; /* dark-border */
+            color: #d1d5db; /* dark-text */
+        }
+        .sidebar-tab.active-tab {
+            background-color: #1f2937; /* dark-surface */
+            border-bottom: 2px solid #4f46e5; /* brand-primary */
+            color: #ffffff;
+        }
+        .tab-content {
+            display: block;
+        }
+        .tab-content.hidden {
+            display: none;
+        }
+        .achievement-toast {
+            transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.5s ease-out;
+        }
+    </style>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="text-dark-text font-sans flex">
+
+    <div id="app" class="flex flex-col min-h-screen w-full">
+        <header class="py-4 px-4 text-center relative">
+            <h1 class="text-3xl sm:text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-brand-primary to-brand-secondary pb-1" data-i18n="mainTitle">
+                Planning Poker
+            </h1>
+            <p class="text-dark-text-secondary text-sm" data-i18n="subTitle">Kollaborative Schätzungen für agile Teams</p>
+             <div class="mt-2 flex items-center justify-center space-x-4 md:absolute md:top-4 md:right-4 md:mt-0">
+                <div id="session-leave-container" class="hidden">
+                     <button id="leave-btn" class="border border-red-500/80 text-red-500/80 hover:bg-red-500 hover:text-white font-bold py-1.5 px-3 rounded-md transition text-sm" data-i18n="leaveSessionButton">Session verlassen</button>
+                </div>
+                <div id="language-switcher" class="text-base">
+                    <button data-lang="de" class="lang-btn px-2 text-dark-text-secondary hover:text-white transition-colors">DE</button>
+                    <span class="text-dark-text-secondary">|</span>
+                    <button data-lang="en" class="lang-btn px-2 text-dark-text-secondary hover:text-white transition-colors">EN</button>
+                </div>
+            </div>
+        </header>
+
+        <main id="main-content" class="flex-grow p-2 sm:p-4 relative">
+            <!-- Lobby View -->
+            <div id="lobby-view" class="view">
+                <div class="max-w-4xl mx-auto mt-4 md:mt-8 grid grid-cols-1 md:grid-cols-2 gap-6 p-2 md:p-4">
+                    <div id="error-container" class="text-red-400 text-center md:col-span-2 hidden"></div>
+                    
+                    <!-- Create Session Form -->
+                    <div class="bg-dark-surface p-5 rounded-lg shadow-lg border border-dark-border">
+                        <h2 class="text-2xl font-bold mb-4 text-white" data-i18n="createSessionTitle">Neue Session erstellen</h2>
+                        <form id="create-session-form" class="space-y-3">
+                            <input type="text" id="create-user-name" data-i18n-placeholder="yourNamePlaceholder" placeholder="Ihr Name" class="w-full bg-gray-800 text-white p-2.5 rounded-md border border-dark-border focus:outline-none focus:ring-2 focus:ring-brand-primary" required />
+                            <input type="text" id="create-session-name" data-i18n-placeholder="sessionNamePlaceholder" placeholder="Name der Session (z.B. 'Sprint 25')" class="w-full bg-gray-800 text-white p-2.5 rounded-md border border-dark-border focus:outline-none focus:ring-2 focus:ring-brand-primary" required />
+                            <div>
+                                <label for="card-deck-select" class="text-sm text-dark-text-secondary mb-1 block" data-i18n="cardDeckLabel">Karten-Deck</label>
+                                <select id="card-deck-select" class="w-full bg-gray-800 text-white p-2.5 rounded-md border border-dark-border focus:outline-none focus:ring-2 focus:ring-brand-primary">
+                                    <option value="fibonacci" data-i18n="deckFibonacci">Fibonacci (0, 1, 2, 3, 5...)</option>
+                                    <option value="tshirt" data-i18n="deckTshirt">T-Shirt Größen (XS, S, M...)</option>
+                                    <option value="sequential" data-i18n="deckSequential">Sequenziell (1, 2, 3...)</option>
+                                    <option value="powers_of_2" data-i18n="deckPowersOf2">Potenzen von 2 (0, 1, 2, 4...)</option>
+                                    <option value="custom" data-i18n="deckCustom">Benutzerdefiniert</option>
+                                </select>
+                            </div>
+                            <div id="custom-card-values-container" class="hidden">
+                                <label for="custom-card-values" class="text-sm text-dark-text-secondary mb-1 block" data-i18n="customDeckLabel">Eigene Kartenwerte (kommagetrennt)</label>
+                                <input type="text" id="custom-card-values" data-i18n-placeholder="customDeckPlaceholder" placeholder="z.B. 10, 20, 30, 100" class="w-full bg-gray-800 text-white p-2.5 rounded-md border border-dark-border focus:outline-none focus:ring-2 focus:ring-brand-primary" />
+                            </div>
+                            <button type="submit" class="w-full bg-brand-primary hover:bg-opacity-90 text-white font-bold py-2.5 px-4 rounded-md transition duration-300 flex items-center justify-center disabled:bg-gray-500" data-i18n="createButton">Erstellen</button>
+                        </form>
+                    </div>
+
+                    <!-- Join Session Form -->
+                    <div class="bg-dark-surface p-5 rounded-lg shadow-lg border border-dark-border">
+                        <h2 class="text-2xl font-bold mb-4 text-white" data-i18n="joinSessionTitle">Session beitreten</h2>
+                        <form id="join-session-form" class="space-y-3">
+                           <input type="text" id="join-user-name" data-i18n-placeholder="yourNamePlaceholder" placeholder="Ihr Name" class="w-full bg-gray-800 text-white p-2.5 rounded-md border border-dark-border focus:outline-none focus:ring-2 focus:ring-brand-primary" required />
+                           <input type="text" id="join-session-id" data-i18n-placeholder="sessionIdPlaceholder" placeholder="Session ID" class="w-full bg-gray-800 text-white p-2.5 rounded-md border border-dark-border focus:outline-none focus:ring-2 focus:ring-brand-primary" required />
+                           <button type="submit" class="w-full bg-brand-secondary hover:bg-opacity-90 text-white font-bold py-2.5 px-4 rounded-md transition duration-300 flex items-center justify-center disabled:bg-gray-500" data-i18n="joinButton">Beitreten</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Session View -->
+            <div id="session-view" class="view hidden-view transition-opacity duration-300 ease-in-out">
+                 <!-- Content will be injected by JavaScript -->
+            </div>
+        </main>
+        
+        <footer class="text-center py-3 text-dark-text-secondary text-sm">
+            <p data-i18n="footerText">Erstellt mit Leidenschaft für agile Teams.</p>
+        </footer>
+    </div>
+    
+    <div id="toast-container" class="fixed bottom-4 right-4 z-[100] flex flex-col items-end gap-3"></div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Import functions from the Firebase SDKs
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+        import { 
+            getFirestore, collection, doc, addDoc, getDoc, updateDoc, onSnapshot,
+            arrayUnion, arrayRemove, deleteDoc, writeBatch
+        } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
+        // =================================================================================
+        // I18N & LANGUAGE SETUP
+        // =================================================================================
+        const I18N = {
+            de: {
+                htmlLang: 'de',
+                pageTitle: 'Planning Poker',
+                mainTitle: 'Planning Poker',
+                subTitle: 'Kollaborative Schätzungen für agile Teams',
+                footerText: 'Erstellt mit Leidenschaft für agile Teams.',
+                createSessionTitle: 'Neue Session erstellen',
+                yourNamePlaceholder: 'Ihr Name',
+                sessionNamePlaceholder: "Name der Session (z.B. 'Sprint 25')",
+                cardDeckLabel: 'Karten-Deck',
+                deckFibonacci: 'Fibonacci (0, 1, 2, 3, 5...)',
+                deckTshirt: 'T-Shirt Größen (XS, S, M...)',
+                deckSequential: 'Sequenziell (1, 2, 3...)',
+                deckPowersOf2: 'Potenzen von 2 (0, 1, 2, 4...)',
+                deckCustom: 'Benutzerdefiniert',
+                customDeckLabel: 'Eigene Kartenwerte (kommagetrennt)',
+                customDeckPlaceholder: 'z.B. 10, 20, 30, 100',
+                createButton: 'Erstellen',
+                joinSessionTitle: 'Session beitreten',
+                sessionIdPlaceholder: 'Session ID',
+                joinButton: 'Beitreten',
+                participantsTitle: 'Teilnehmer ({{count}})',
+                creatorBadgeTitle: 'Session-Ersteller',
+                moderatorBadgeTitle: 'Moderator',
+                spectatorBadge: 'Zuschauer',
+                spectatorInfo: 'Zuschauer nehmen nicht an der Abstimmung teil.',
+                reactionTitle: 'Reaktion',
+                extremeBadge: 'Extrem',
+                highBadge: 'Hoch',
+                lowBadge: 'Tief',
+                nextTicketTitle: 'Nächstes Ticket',
+                ticketTitlePlaceholder: 'Ticket-Titel oder ID eingeben',
+                startRoundButton: 'Runde starten',
+                waitingForTicketTitle: 'Warten auf nächstes Ticket...',
+                waitingForTicketSubtitle: 'Ein Moderator wird die nächste Runde starten.',
+                currentTicket: 'Aktuelles Ticket: {{title}}',
+                resultsFor: 'Ergebnis für: {{title}}',
+                average: 'Durchschnitt:',
+                allVoted: 'Alle haben abgestimmt!',
+                revealingVotes: 'Stimmen werden aufgedeckt...',
+                revealButton: 'Stimmen aufdecken',
+                startDiscussionButton: 'Diskussion starten',
+                revoteButton: 'Erneut abstimmen',
+                nextTicketButton: 'Nächstes Ticket',
+                leaveSessionButton: 'Session verlassen',
+                historyTitle: 'Verlauf',
+                achievementsTitle: 'Auszeichnungen',
+                noEstimatesYet: 'Noch keine Schätzungen.',
+                noAchievementsYet: 'Noch keine Auszeichnungen verdient.',
+                copyIdButtonTitle: 'Session-ID kopieren',
+                sessionIdDisplay: 'ID: {{sessionId}}',
+                youAreSpectator: 'Du bist ein Zuschauer',
+                confirmKickUser: 'Möchten Sie {{userName}} wirklich entfernen?',
+                confirmRemoveAchievement: 'Möchten Sie diese Auszeichnung wirklich entfernen?',
+                demoteModerator: 'Moderator-Status entziehen',
+                promoteModerator: 'Zum Moderator ernennen',
+                kickParticipant: 'Teilnehmer entfernen',
+                makeSpectator: 'Zum Zuschauer machen',
+                makeParticipant: 'Zum Teilnehmer machen',
+                idCopied: 'Session ID in die Zwischenablage kopiert!',
+                errorNameAndSessionName: 'Bitte geben Sie Ihren Namen und einen Session-Namen ein.',
+                errorCustomDeckValues: "Bei 'Benutzerdefiniert' müssen Sie eigene Kartenwerte angeben.",
+                errorEmptyDeck: 'Das Kartendeck darf nicht leer sein.',
+                errorCreateSession: 'Session konnte nicht erstellt werden.',
+                errorNameAndSessionId: 'Bitte geben Sie Ihren Namen und eine Session-ID ein.',
+                errorSessionNotFound: 'Session mit dieser ID nicht gefunden.',
+                errorJoinSession: 'Beitritt zur Session fehlgeschlagen.',
+                errorKicked: 'Sie wurden aus der Session entfernt.',
+                errorSessionDeleted: 'Session nicht gefunden oder wurde gelöscht.',
+                errorConnectionLost: 'Verbindung zur Session verloren.',
+                errorCouldNotJoin: 'Konnte der Session nicht beitreten.',
+                achieveUnanimityTitle: 'Einstimmig: {{value}}',
+                achieveUnanimityDesc: "Alle Teilnehmer haben mit '{{value}}' gestimmt.",
+                achieveWideSpreadTitle: 'Große Kluft',
+                achieveWideSpreadDesc: 'Die Schätzungen liegen weit auseinander. Zeit für eine Diskussion!',
+                achieveCoffeeBreakTitle: 'Zeit für eine Pause?',
+                achieveCoffeeBreakDesc: 'Mehr als die Hälfte des Teams ist bereit für einen Kaffee.',
+                achieveAllQuestionTitle: 'Großes Fragezeichen',
+                achieveAllQuestionDesc: 'Das Team ist sich einig, dass es sich unsicher ist. Mehr Details benötigt!',
+                achieveRevoteTitle: 'Nochmal bitte!',
+                achieveRevoteDesc: 'Dieses Ticket wurde mehr als einmal geschätzt. Ausdauer zahlt sich aus!',
+                achieveSpotlightTitle: 'Im Rampenlicht: {{name}}',
+                achieveSpotlightDesc: 'Zweimal hintereinander zur Diskussion ausgewählt. Deine Meinung ist gefragt!',
+                achieveMissedVoteTitle: 'Zu spät, {{name}}?',
+                achieveMissedVoteDesc: 'Keine Stimme abgegeben, bevor die Karten aufgedeckt wurden.',
+                achieveFastFingersTitle: 'Schnelle Finger: {{name}}',
+                achieveFastFingersDesc: 'Du hast als Erste(r) in dieser Runde abgestimmt!',
+                achieveOutlierTitle: 'Der Ausreißer: {{name}}',
+                achieveOutlierDesc: 'Deine Schätzung sticht heraus. Eine mutige Perspektive!',
+                generateRandomName: 'Zufälligen Ticket-Namen generieren',
+                achieveRandomNameTitle: 'Zufalls-Champion',
+                achieveRandomNameDesc: 'Ein Ticket mit einem zufällig generierten Namen gestartet. Kreativität wird belohnt!',
+            },
+            en: {
+                htmlLang: 'en',
+                pageTitle: 'Planning Poker',
+                mainTitle: 'Planning Poker',
+                subTitle: 'Collaborative estimations for agile teams',
+                footerText: 'Crafted with passion for agile teams.',
+                createSessionTitle: 'Create New Session',
+                yourNamePlaceholder: 'Your Name',
+                sessionNamePlaceholder: "Session Name (e.g., 'Sprint 25')",
+                cardDeckLabel: 'Card Deck',
+                deckFibonacci: 'Fibonacci (0, 1, 2, 3, 5...)',
+                deckTshirt: 'T-Shirt Sizes (XS, S, M...)',
+                deckSequential: 'Sequential (1, 2, 3...)',
+                deckPowersOf2: 'Powers of 2 (0, 1, 2, 4...)',
+                deckCustom: 'Custom',
+                customDeckLabel: 'Custom card values (comma-separated)',
+                customDeckPlaceholder: 'e.g., 10, 20, 30, 100',
+                createButton: 'Create',
+                joinSessionTitle: 'Join Session',
+                sessionIdPlaceholder: 'Session ID',
+                joinButton: 'Join',
+                participantsTitle: 'Participants ({{count}})',
+                creatorBadgeTitle: 'Session Creator',
+                moderatorBadgeTitle: 'Moderator',
+                spectatorBadge: 'Spectator',
+                spectatorInfo: 'Spectators do not participate in voting.',
+                reactionTitle: 'Reaction',
+                extremeBadge: 'Extreme',
+                highBadge: 'High',
+                lowBadge: 'Low',
+                nextTicketTitle: 'Next Ticket',
+                ticketTitlePlaceholder: 'Enter ticket title or ID',
+                startRoundButton: 'Start Round',
+                waitingForTicketTitle: 'Waiting for the next ticket...',
+                waitingForTicketSubtitle: 'A moderator will start the next round.',
+                currentTicket: 'Current Ticket: {{title}}',
+                resultsFor: 'Results for: {{title}}',
+                average: 'Average:',
+                allVoted: 'Everyone has voted!',
+                revealingVotes: 'Revealing votes...',
+                revealButton: 'Reveal Votes',
+                startDiscussionButton: 'Start Discussion',
+                revoteButton: 'Vote Again',
+                nextTicketButton: 'Next Ticket',
+                leaveSessionButton: 'Leave Session',
+                historyTitle: 'History',
+                achievementsTitle: 'Achievements',
+                noEstimatesYet: 'No estimates yet.',
+                noAchievementsYet: 'No achievements earned yet.',
+                copyIdButtonTitle: 'Copy Session ID',
+                sessionIdDisplay: 'ID: {{sessionId}}',
+                youAreSpectator: 'You are a spectator',
+                confirmKickUser: 'Are you sure you want to remove {{userName}}?',
+                confirmRemoveAchievement: 'Are you sure you want to remove this achievement?',
+                demoteModerator: 'Demote from Moderator',
+                promoteModerator: 'Promote to Moderator',
+                kickParticipant: 'Remove Participant',
+                makeSpectator: 'Make Spectator',
+                makeParticipant: 'Make Participant',
+                idCopied: 'Session ID copied to clipboard!',
+                errorNameAndSessionName: 'Please enter your name and a session name.',
+                errorCustomDeckValues: 'For custom decks, you must provide card values.',
+                errorEmptyDeck: 'The card deck cannot be empty.',
+                errorCreateSession: 'Failed to create session.',
+                errorNameAndSessionId: 'Please enter your name and a session ID.',
+                errorSessionNotFound: 'Session with this ID not found.',
+                errorJoinSession: 'Failed to join session.',
+                errorKicked: 'You have been removed from the session.',
+                errorSessionDeleted: 'Session not found or has been deleted.',
+                errorConnectionLost: 'Lost connection to the session.',
+                errorCouldNotJoin: 'Could not join the session.',
+                achieveUnanimityTitle: 'Unanimous: {{value}}',
+                achieveUnanimityDesc: "All participants voted for '{{value}}'.",
+                achieveWideSpreadTitle: 'Wide Spread',
+                achieveWideSpreadDesc: 'The estimates are far apart. Time for a discussion!',
+                achieveCoffeeBreakTitle: 'Time for a break?',
+                achieveCoffeeBreakDesc: 'More than half the team is ready for a coffee.',
+                achieveAllQuestionTitle: 'Big Question Mark',
+                achieveAllQuestionDesc: 'The team agrees that it is unsure. More details needed!',
+                achieveRevoteTitle: 'One More Time!',
+                achieveRevoteDesc: 'This ticket was estimated more than once. Persistence pays off!',
+                achieveSpotlightTitle: 'In the Spotlight: {{name}}',
+                achieveSpotlightDesc: 'Selected for discussion twice in a row. Your opinion is valued!',
+                achieveMissedVoteTitle: 'Late to the Party, {{name}}?',
+                achieveMissedVoteDesc: "Didn't cast a vote before the cards were revealed.",
+                achieveFastFingersTitle: 'Fast Fingers: {{name}}',
+                achieveFastFingersDesc: 'You were the first to vote in this round!',
+                achieveOutlierTitle: 'The Outlier: {{name}}',
+                achieveOutlierDesc: 'Your estimate stands out. A brave perspective!',
+                generateRandomName: 'Generate random ticket name',
+                achieveRandomNameTitle: 'Random Champion',
+                achieveRandomNameDesc: 'Started a ticket with a randomly generated name. Creativity is rewarded!',
+            }
+        };
+
+        let currentLanguage = localStorage.getItem('pokerLanguage') || 'de';
+
+        const FUNNY_TICKET_NAMES = {
+            de: [
+                "Das Hamsterrad schneller drehen",
+                "Einhörner als Zahlungsoption hinzufügen",
+                "Den Fluxkompensator kalibrieren",
+                "Katzenbilder-API integrieren",
+                "Button 'Macht alles super' implementieren",
+                "Mehr Bling-Bling auf der Startseite",
+                "KI trainieren, um Kaffee zu kochen",
+                "Bug fixen, der nur bei Vollmond auftritt",
+                "Die Farbe des Fahrradschuppens diskutieren",
+                "Alle Daten auf Lochkarten migrieren",
+                "Roter-Button-Panik-Modus einbauen",
+                "Die Weltherrschaft an uns reißen (optional)",
+                "Dem Praktikanten den Server erklären",
+                "Schatten-IT in die Cloud schieben",
+                "Das Internet ausdrucken (fürs Archiv)",
+                "Feenstaub-Deployment-Pipeline",
+                "Dramatische Ladeanimation hinzufügen",
+                "Rubberducking mit einer echten Ente",
+                "Unendliches Scrollen bis zum Urknall",
+                "Konfetti-Effekt bei jedem Klick"
+            ],
+            en: [
+                "Spin the hamster wheel faster",
+                "Add unicorns as a payment option",
+                "Calibrate the flux capacitor",
+                "Integrate cat picture API",
+                "Implement 'Make everything awesome' button",
+                "More bling on the homepage",
+                "Train AI to make coffee",
+                "Fix bug that only occurs on a full moon",
+                "Discuss the color of the bike shed",
+                "Migrate all data to punch cards",
+                "Implement red button panic mode",
+                "Achieve world domination (optional)",
+                "Explain the server to the intern",
+                "Push shadow IT to the cloud",
+                "Print the internet (for backup)",
+                "Pixie dust deployment pipeline",
+                "Add dramatic loading animation",
+                "Rubber ducking with a real duck",
+                "Infinite scroll back to the big bang",
+                "Confetti effect on every click"
+            ]
+        };
+
+        const t = (key, params = {}) => {
+            const lang = currentLanguage;
+            let text = I18N[lang][key] || I18N['de'][key] || `[${key}]`;
+            for (const [paramKey, paramValue] of Object.entries(params)) {
+                text = text.replace(`{{${paramKey}}}`, paramValue);
+            }
+            return text;
+        };
+        
+        // =================================================================================
+        // FIREBASE CONFIGURATION
+        // =================================================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDehHjrHCMsrAZNsrbjZaIOZUZ-j3ukRtI",
+            authDomain: "planning-poker-c6fd2.firebaseapp.com",
+            projectId: "planning-poker-c6fd2",
+            storageBucket: "planning-poker-c6fd2.appspot.com",
+            messagingSenderId: "358039112803",
+            appId: "1:358039112803:web:311483c51fc9d13afcfc56"
+        };
+
+        // =================================================================================
+        // INITIALIZATION
+        // =================================================================================
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const sessionsCollectionRef = collection(db, 'sessions');
+
+        const PREDEFINED_DECKS = {
+            fibonacci: ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?', '☕'],
+            tshirt: ['XS', 'S', 'M', 'L', 'XL', '?', '☕'],
+            sequential: ['1', '2', '3', '4', '5', '6', '7', '?', '☕'],
+            powers_of_2: ['0', '1', '2', '4', '8', '16', '32', '64', '?', '☕'],
+        };
+        let currentSessionId = null;
+        let currentUser = null;
+        let sessionUnsubscribe = null;
+        let currentSessionData = null;
+        window.revealTimeout = null;
+        let lastViewKey = ''; // For animating session view transitions
+        let activeSidebarTab = 'history';
+        let lastRandomName = null;
+
+        const THEMES = {
+            classic: {
+                name: 'Classic',
+                card: { bg: 'bg-dark-surface', border: 'border-dark-border', text: 'text-5xl opacity-80', hover: 'hover:border-brand-primary', selected: 'ring-4 ring-brand-primary scale-105' },
+                cardBack: { bg: 'bg-gradient-to-br from-brand-primary to-brand-secondary' },
+                results: { bg: 'bg-white', text: 'text-dark-bg', countBg: 'bg-brand-secondary', countText: 'text-white' }
+            },
+            space: {
+                name: 'Space',
+                card: { bg: 'bg-gray-900', border: 'border-indigo-400', text: 'text-5xl text-white opacity-90', hover: 'hover:border-purple-400', selected: 'ring-4 ring-purple-500 scale-105' },
+                cardBack: { bg: 'bg-gradient-to-br from-indigo-800 via-black to-purple-900' },
+                results: { bg: 'bg-indigo-900', text: 'text-white', countBg: 'bg-purple-500', countText: 'text-white' }
+            },
+            technology: {
+                name: 'Technology',
+                card: { bg: 'bg-black', border: 'border-cyan-500', text: 'text-5xl text-cyan-300', hover: 'hover:border-cyan-300', selected: 'ring-4 ring-cyan-400 scale-105' },
+                cardBack: { bg: 'bg-gradient-to-br from-gray-800 via-black to-cyan-900' },
+                results: { bg: 'bg-gray-900', text: 'text-cyan-300', countBg: 'bg-cyan-500', countText: 'text-black' }
+            },
+            forest: {
+                name: 'Forest',
+                card: { bg: 'bg-green-900', border: 'border-yellow-600', text: 'text-5xl text-yellow-100', hover: 'hover:border-lime-400', selected: 'ring-4 ring-green-400 scale-105' },
+                cardBack: { bg: 'bg-gradient-to-br from-green-700 to-yellow-900' },
+                results: { bg: 'bg-yellow-800', text: 'text-green-100', countBg: 'bg-green-600', countText: 'text-white' }
+            },
+            waves: {
+                name: 'Waves',
+                card: { bg: 'bg-blue-700', border: 'border-blue-300', text: 'text-5xl text-white', hover: 'hover:border-white', selected: 'ring-4 ring-blue-200 scale-105' },
+                cardBack: { bg: 'bg-gradient-to-br from-blue-500 to-teal-400' },
+                results: { bg: 'bg-blue-200', text: 'text-blue-900', countBg: 'bg-teal-500', countText: 'text-white' }
+            }
+        };
+        let currentThemeKey = localStorage.getItem('pokerTheme') || 'classic';
+
+        // =================================================================================
+        // DOM ELEMENTS
+        // =================================================================================
+        const lobbyView = document.getElementById('lobby-view');
+        const sessionView = document.getElementById('session-view');
+        const errorContainer = document.getElementById('error-container');
+        const createSessionForm = document.getElementById('create-session-form');
+        const joinSessionForm = document.getElementById('join-session-form');
+        const cardDeckSelect = document.getElementById('card-deck-select');
+        const customCardValuesContainer = document.getElementById('custom-card-values-container');
+
+        // =================================================================================
+        // UI RENDERING FUNCTIONS
+        // =================================================================================
+        
+        const renderError = (message) => {
+            errorContainer.textContent = message;
+            errorContainer.classList.remove('hidden');
+        };
+        
+        const clearError = () => {
+            errorContainer.textContent = '';
+            errorContainer.classList.add('hidden');
+        };
+        
+        const showAchievementToast = (achievement) => {
+            const toastContainer = document.getElementById('toast-container');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = 'achievement-toast bg-dark-surface border-l-4 border-yellow-400 rounded-lg shadow-2xl p-4 flex items-start gap-4 w-80 transform transition-all duration-500 translate-x-full opacity-0';
+            toast.innerHTML = `
+                <span class="text-3xl mt-1">${achievement.icon}</span>
+                <div>
+                    <h4 class="font-bold text-white">${achievement.title}</h4>
+                    <p class="text-sm text-dark-text-secondary">${achievement.description}</p>
+                </div>
+            `;
+            toastContainer.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-x-full', 'opacity-0');
+                toast.classList.add('translate-x-0', 'opacity-100');
+            });
+
+            setTimeout(() => {
+                toast.classList.remove('translate-x-0', 'opacity-100');
+                toast.classList.add('translate-x-full', 'opacity-0');
+                toast.addEventListener('transitionend', () => toast.remove());
+            }, 5000);
+        };
+
+        const renderSessionView = (session) => {
+            const isModerator = session.creatorId === currentUser.id || (session.moderatorIds && session.moderatorIds.includes(currentUser.id));
+            const votesRevealed = session.votesRevealed;
+            const activeParticipants = session.users.filter(u => u.role !== 'spectator');
+            const allVoted = activeParticipants.length > 0 && activeParticipants.every(u => u.vote !== null);
+            const votingInProgress = session.currentTicketTitle && !votesRevealed;
+            
+            const newViewKey = `${session.currentTicketTitle}-${session.votesRevealed}`;
+            const theme = THEMES[currentThemeKey];
+
+            const doRender = () => {
+                let participantsHTML = session.users.map(user => {
+                    const hasVoted = user.vote !== null;
+                    const voteDisplay = votesRevealed
+                        ? `<span class="text-lg font-bold text-white bg-brand-primary w-8 h-8 flex items-center justify-center rounded-full">${user.vote || '-'}</span>`
+                        : `<div class="w-8 h-8 flex items-center justify-center">${hasVoted ? '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>' : ''}</div>`;
+                    
+                    const currentUserIsMod = session.creatorId === currentUser.id || (session.moderatorIds && session.moderatorIds.includes(currentUser.id));
+                    const isClickable = currentUserIsMod;
+                    const clickableClass = isClickable ? 'cursor-pointer hover:bg-dark-border' : '';
+
+                    let badgesHTML = '';
+                    let badgeItems = [];
+
+                    if (user.reaction) {
+                        badgeItems.push(`<span class="text-lg" title="${t('reactionTitle')}">${user.reaction}</span>`);
+                    }
+                    if(user.id === session.creatorId) {
+                        badgeItems.push(`<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor" title="${t('creatorBadgeTitle')}"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>`);
+                    } else if(user.id && session.moderatorIds && session.moderatorIds.includes(user.id)) {
+                        badgeItems.push(`<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor" title="${t('moderatorBadgeTitle')}"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>`);
+                    }
+                    if(user.role === 'spectator') {
+                        badgeItems.push(`<span class="text-xs font-bold bg-gray-500 text-white px-2 py-0.5 rounded-full" title="${t('spectatorInfo')}">${t('spectatorBadge')}</span>`);
+                    }
+                    
+                    if (user.id === session.discussionHighVoterId && user.id === session.discussionLowVoterId) {
+                        badgeItems.push(`<span class="text-xs font-bold bg-purple-500 text-white px-2 py-0.5 rounded-full">${t('extremeBadge')}</span>`);
+                    } else if (user.id === session.discussionHighVoterId) {
+                        badgeItems.push(`<span class="text-xs font-bold bg-yellow-400 text-black px-2 py-0.5 rounded-full">${t('highBadge')}</span>`);
+                    } else if (user.id === session.discussionLowVoterId) {
+                        badgeItems.push(`<span class="text-xs font-bold bg-cyan-400 text-black px-2 py-0.5 rounded-full">${t('lowBadge')}</span>`);
+                    }
+
+                    if (badgeItems.length > 0) {
+                        badgesHTML = `<div class="flex items-center space-x-2 ml-2 flex-shrink-0">${badgeItems.join('')}</div>`;
+                    }
+
+                    let highlightClass = '';
+                    if (session.discussionHighVoterId === user.id || session.discussionLowVoterId === user.id) {
+                        highlightClass = 'ring-2 ring-offset-2 ring-offset-dark-surface';
+                        if (session.discussionHighVoterId === user.id && session.discussionLowVoterId === user.id) highlightClass += ' ring-purple-500';
+                        else if (session.discussionHighVoterId === user.id) highlightClass += ' ring-yellow-400';
+                        else highlightClass += ' ring-cyan-400';
+                    }
+
+                    return `
+                        <div class="participant-item flex items-center bg-dark-bg p-2 rounded-lg shadow-md border border-dark-border transition-all ${clickableClass} ${highlightClass}" data-user-id="${user.id}" data-user-name="${user.name}">
+                            <span class="w-3 h-3 rounded-full mr-2 flex-shrink-0 ${hasVoted ? 'bg-green-400' : (user.role === 'spectator' ? 'bg-blue-400' : 'bg-gray-500')}"></span>
+                            <p class="flex-grow min-w-0 text-dark-text font-medium truncate" title="${user.name}">${user.name}</p>
+                            ${badgesHTML}
+                            <div class="ml-auto pl-2 flex-shrink-0">
+                                ${voteDisplay}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                const themeSelectorHTML = `
+                    <div class="theme-selector-container flex justify-center md:justify-end mb-4">
+                        <div class="inline-flex items-center space-x-2 p-1 bg-dark-bg/50 backdrop-blur-sm rounded-full">
+                            ${Object.keys(THEMES).map(key => `
+                                <button
+                                    data-theme-key="${key}"
+                                    class="theme-btn w-6 h-6 rounded-full transition-transform duration-200 hover:scale-110 ${THEMES[key].cardBack.bg} ${currentThemeKey === key ? 'ring-2 ring-offset-2 ring-offset-dark-surface ring-white' : ''}"
+                                    title="${THEMES[key].name}"
+                                ></button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+
+                let mainContentHTML = '';
+                
+                if (!session.currentTicketTitle && isModerator) {
+                    mainContentHTML = `
+                        <div class="w-full flex flex-col items-center justify-center h-full">
+                            <h3 class="text-2xl font-bold text-center mb-4 text-white">${t('nextTicketTitle')}</h3>
+                            <form id="ticket-form" class="w-full max-w-md space-y-4">
+                                <div class="relative">
+                                    <input type="text" id="ticket-title-input" placeholder="${t('ticketTitlePlaceholder')}" class="w-full bg-gray-800 text-white p-3 pr-12 rounded-md border border-dark-border focus:outline-none focus:ring-2 focus:ring-brand-primary" required />
+                                    <button type="button" id="random-name-btn" class="absolute inset-y-0 right-0 flex items-center pr-3 text-dark-text-secondary hover:text-white transition-colors" title="${t('generateRandomName')}">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><path d="M16 8h.01"/><path d="M8 8h.01"/><path d="M12 12h.01"/><path d="M8 16h.01"/><path d="M16 16h.01"/></svg>
+                                    </button>
+                                </div>
+                                <button type="submit" class="w-full bg-brand-primary hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-md transition">${t('startRoundButton')}</button>
+                            </form>
+                        </div>
+                    `;
+                } else if (!session.currentTicketTitle && !isModerator) {
+                     mainContentHTML = `
+                        <div class="w-full flex flex-col items-center justify-center h-full">
+                            <h3 class="text-xl font-semibold text-center text-white">${t('waitingForTicketTitle')}</h3>
+                            <p class="text-dark-text-secondary mt-2">${t('waitingForTicketSubtitle')}</p>
+                        </div>
+                    `;
+                } else if (votingInProgress) {
+                    const isSpectator = currentUser.role === 'spectator';
+                    if (isSpectator) {
+                        mainContentHTML = `
+                            <div class="flex flex-col items-center justify-center h-full text-center">
+                                <h2 class="text-2xl font-semibold text-white mb-4 break-all">${t('currentTicket', { title: session.currentTicketTitle })}</h2>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-dark-text-secondary mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                <h3 class="text-xl font-semibold text-white">${t('youAreSpectator')}</h3>
+                                <p class="text-dark-text-secondary mt-2">${t('spectatorInfo')}</p>
+                            </div>
+                        `;
+                    } else {
+                        const cardsHTML = session.cardValues.map(value => {
+                            const isSelected = currentUser.vote === value;
+                            const selectedClasses = isSelected ? theme.card.selected : '';
+                            return `
+                                <div class="perspective-1000">
+                                    <div class="relative w-20 h-28 rounded-lg flex items-center justify-center text-2xl font-bold shadow-lg transform transition-all duration-300 cursor-pointer ${theme.card.bg} border-2 ${theme.card.border} ${theme.card.hover} ${selectedClasses}" data-vote="${value}">
+                                        <div class="absolute inset-0 ${theme.cardBack.bg} rounded-lg flex items-center justify-center ${theme.card.text}">
+                                            ${value}
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+
+                        mainContentHTML = `
+                            <div class="flex flex-col items-center relative">
+                                <h2 class="text-2xl font-semibold text-white mb-4 break-all">${t('currentTicket', { title: session.currentTicketTitle })}</h2>
+                                <div id="card-area" class="flex flex-wrap justify-center gap-4 p-4">
+                                    ${cardsHTML}
+                                </div>
+                            </div>
+                        `;
+                    }
+                } else { // Votes revealed
+                     const votes = session.users.filter(u => u.role !== 'spectator').map(u => u.vote).filter(v => v && !isNaN(parseInt(v, 10)));
+                     const numericVotes = votes.map(v => parseInt(v, 10));
+                     const average = numericVotes.length > 0 ? (numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length).toFixed(1) : 'N/A';
+                     
+                     const voteCounts = session.users.reduce((acc, user) => {
+                        if (user.vote) acc[user.vote] = (acc[user.vote] || 0) + 1;
+                        return acc;
+                     }, {});
+
+                     const resultsCardsHTML = Object.entries(voteCounts).map(([value, count]) => `
+                        <div class="text-center">
+                             <div class="relative w-20 h-28 rounded-lg flex items-center justify-center text-2xl font-bold shadow-lg ${theme.results.bg} ${theme.results.text}">
+                                <span>${value}</span>
+                                <span class="absolute -top-3 -right-3 ${theme.results.countBg} ${theme.results.countText} text-xs font-bold rounded-full h-6 w-6 flex items-center justify-center">${count}</span>
+                             </div>
+                        </div>
+                     `).join('');
+
+                    mainContentHTML = `
+                        <div class="w-full">
+                            <h2 class="text-xl font-semibold text-center text-white mb-2 break-all">${t('resultsFor', { title: session.currentTicketTitle })}</h2>
+                            <div class="flex justify-center items-center gap-4 mb-4">
+                                <span class="text-dark-text-secondary">${t('average')}</span>
+                                <span class="text-3xl font-bold text-brand-secondary">${average}</span>
+                            </div>
+                            <div class="flex flex-wrap justify-center gap-4">
+                               ${resultsCardsHTML}
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                let countdownHTML = '';
+                if (allVoted && votingInProgress) {
+                    countdownHTML = `
+                        <div id="countdown-overlay" class="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-50 rounded-lg opacity-0 transition-opacity duration-500 ease-in-out">
+                            <p class="text-xl text-white mb-2">${t('allVoted')}</p>
+                            <p class="text-8xl font-bold text-brand-secondary" id="countdown-timer">3</p>
+                            <p class="text-xl text-white mt-2">${t('revealingVotes')}</p>
+                        </div>
+                    `;
+                }
+                
+                let actionButtonsHTML = '';
+                if(isModerator) {
+                    if(votingInProgress) {
+                         actionButtonsHTML = `<button id="reveal-btn" ${votesRevealed ? 'disabled' : ''} class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 text-sm rounded-lg transition disabled:bg-gray-600 disabled:cursor-not-allowed">${t('revealButton')}</button>`;
+                    }
+                    if(votesRevealed) {
+                        actionButtonsHTML = `
+                            <button id="start-discussion-btn" class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 text-sm rounded-lg transition">${t('startDiscussionButton')}</button>
+                            <button id="revote-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 text-sm rounded-lg transition">${t('revoteButton')}</button>
+                            <button id="next-ticket-btn" class="bg-brand-primary hover:bg-opacity-90 text-white font-bold py-2 px-4 text-sm rounded-lg transition">${t('nextTicketButton')}</button>
+                        `;
+                    }
+                }
+                
+                let emojiBarHTML = '';
+                if (votesRevealed) {
+                    const EMOJIS = ['👍', '🤔', '🎉', '🤯', '❤️'];
+                    emojiBarHTML = `
+                        <div id="emoji-reaction-bar" class="mt-6 flex justify-center items-center gap-4 p-2 bg-dark-bg/50 backdrop-blur-sm rounded-full w-full max-w-lg mx-auto flex-wrap">
+                            ${EMOJIS.map(emoji => {
+                                const userHasReacted = currentUser.reaction === emoji;
+                                return `
+                                    <button data-emoji="${emoji}" class="emoji-reaction-btn text-2xl p-2 rounded-full hover:bg-dark-border transition-transform duration-200 hover:scale-125 ${userHasReacted ? 'bg-brand-primary/50 ring-2 ring-brand-primary' : ''}">
+                                        ${emoji}
+                                    </button>
+                                `}).join('')}
+                        </div>
+                    `;
+                }
+
+                const sortedHistory = (session.history || []).sort((a, b) => b.timestamp - a.timestamp);
+                const historyHTML = sortedHistory.map(item => `
+                    <li class="flex justify-between items-center p-2 bg-dark-bg rounded-md">
+                        <span class="text-sm text-dark-text truncate pr-2" title="${item.title}">${item.title}</span>
+                        <span class="font-bold text-brand-primary text-lg">${item.result}</span>
+                    </li>
+                `).join('');
+
+                const sortedAchievements = (session.achievements || []).sort((a, b) => b.timestamp - a.timestamp);
+                const achievementsHTML = sortedAchievements.map(item => `
+                    <div class="bg-dark-bg rounded-lg p-3 flex items-start gap-4 relative group">
+                        <span class="text-3xl mt-1">${item.icon}</span>
+                        <div class="flex-1">
+                            <h4 class="font-bold text-white">${item.title}</h4>
+                            <p class="text-sm text-dark-text-secondary">${item.description}</p>
+                        </div>
+                        ${isModerator ? `<button data-achievement-id="${item.id}" class="remove-achievement-btn absolute top-2 right-2 text-dark-text-secondary hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">&times;</button>` : ''}
+                    </div>
+                `).join('');
+
+
+                sessionView.innerHTML = `
+                    <div class="container mx-auto px-0 sm:px-4 relative">
+                        <header class="text-center mb-4">
+                            <h1 class="text-2xl font-bold text-white">${session.name}</h1>
+                             <button id="copy-id-btn" title="${t('copyIdButtonTitle')}" class="inline-flex items-center gap-2 text-sm text-dark-text-secondary hover:text-brand-primary transition-colors">
+                                <span>${t('sessionIdDisplay', {sessionId: currentSessionId})}</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                                </svg>
+                            </button>
+                        </header>
+                        <div class="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
+                            <aside class="lg:col-span-1 bg-dark-surface p-4 rounded-lg border border-dark-border flex flex-col h-full">
+                                <h2 class="text-xl font-semibold mb-4 text-white">${t('participantsTitle', {count: session.users.length})}</h2>
+                                <div id="participants-panel" class="space-y-3 overflow-y-auto flex-grow">${participantsHTML}</div>
+                            </aside>
+                            <main class="lg:col-span-3 bg-dark-surface p-4 rounded-lg border border-dark-border relative flex flex-col justify-between h-full">
+                                 <div class="flex-grow relative">
+                                    ${votingInProgress ? themeSelectorHTML : ''}
+                                    ${mainContentHTML}
+                                 </div>
+                                 <div class="mt-8 flex flex-wrap justify-center gap-4">
+                                    ${actionButtonsHTML}
+                                </div>
+                                ${emojiBarHTML}
+                                ${countdownHTML}
+                            </main>
+                            <aside id="sidebar-right" class="lg:col-span-1 bg-dark-surface rounded-lg border border-dark-border flex flex-col h-full overflow-hidden">
+                                <div class="flex border-b border-dark-border flex-shrink-0">
+                                    <button class="sidebar-tab ${activeSidebarTab === 'history' ? 'active-tab' : ''}" data-tab="history">${t('historyTitle')}</button>
+                                    <button class="sidebar-tab ${activeSidebarTab === 'achievements' ? 'active-tab' : ''}" data-tab="achievements">${t('achievementsTitle')}</button>
+                                </div>
+                                <div class="p-4 flex-grow overflow-y-auto">
+                                    <div id="history-panel-content" class="tab-content ${activeSidebarTab !== 'history' ? 'hidden' : ''}">
+                                        <ul class="space-y-2">${historyHTML || `<li class="text-sm text-dark-text-secondary">${t('noEstimatesYet')}</li>`}</ul>
+                                    </div>
+                                    <div id="achievements-panel-content" class="tab-content ${activeSidebarTab !== 'achievements' ? 'hidden' : ''}">
+                                        <div class="space-y-3">${achievementsHTML || `<p class="text-sm text-dark-text-secondary">${t('noAchievementsYet')}</p>`}</div>
+                                    </div>
+                                </div>
+                            </aside>
+                        </div>
+                    </div>
+                `;
+                
+                attachSessionEventListeners();
+
+                const countdownOverlay = document.getElementById('countdown-overlay');
+                if (countdownOverlay) {
+                    requestAnimationFrame(() => {
+                        countdownOverlay.classList.remove('opacity-0');
+                    });
+                }
+
+                if (allVoted && votingInProgress) {
+                    let count = 3;
+                    const timerEl = document.getElementById('countdown-timer');
+                    const intervalId = setInterval(() => {
+                        count--;
+                        if (timerEl) {
+                            timerEl.textContent = count > 0 ? count : '1';
+                        }
+                        if (count <= 0) {
+                            clearInterval(intervalId);
+                        }
+                    }, 1000);
+                }
+            };
+
+            const isNextTicketTransition = lastViewKey.endsWith('-true') && newViewKey === '-false';
+
+            if (lastViewKey && lastViewKey !== newViewKey && !isNextTicketTransition) {
+                sessionView.classList.add('opacity-0');
+                setTimeout(() => {
+                    doRender();
+                    sessionView.classList.remove('opacity-0');
+                }, 300); 
+            } else {
+                doRender();
+            }
+            
+            lastViewKey = newViewKey;
+        };
+
+        const showView = (viewName) => {
+            lobbyView.classList.toggle('hidden-view', viewName !== 'lobby');
+            sessionView.classList.toggle('hidden-view', viewName !== 'session');
+            const leaveContainer = document.getElementById('session-leave-container');
+            if (leaveContainer) {
+                leaveContainer.classList.toggle('hidden', viewName !== 'session');
+            }
+        };
+
+        const updateUIText = () => {
+            const lang = currentLanguage;
+            document.documentElement.lang = I18N[lang].htmlLang;
+            document.title = I18N[lang].pageTitle;
+            
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.dataset.i18n;
+                if (I18N[lang][key]) {
+                    el.textContent = I18N[lang][key];
+                }
+            });
+
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.dataset.i18nPlaceholder;
+                if(I18N[lang][key]) {
+                    el.placeholder = I18N[lang][key];
+                }
+            });
+
+            document.querySelectorAll('.lang-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.lang === lang);
+            });
+        };
+
+        const updateAllText = () => {
+            updateUIText();
+            if (currentSessionData) {
+                renderSessionView(currentSessionData);
+            }
+        };
+
+        // =================================================================================
+        // CONTEXT MENU FUNCTIONS
+        // =================================================================================
+        const hideContextMenu = () => {
+            const menu = document.getElementById('participant-context-menu');
+            if (menu) {
+                menu.remove();
+            }
+            document.removeEventListener('click', hideContextMenu);
+        };
+        
+        const handleContextMenuAction = (e) => {
+            const button = e.target.closest('.context-menu-btn');
+            if (button) {
+                const { action, userId, userName } = button.dataset;
+                if (action === 'kick') {
+                    if (confirm(t('confirmKickUser', {userName}))) {
+                        kickUser(userId);
+                    }
+                } else if (action === 'promote') {
+                    promoteUser(userId);
+                } else if (action === 'demote') {
+                    demoteUser(userId);
+                } else if (action === 'setSpectator') {
+                    setUserRole(userId, 'spectator');
+                } else if (action === 'setParticipant') {
+                    setUserRole(userId, 'participant');
+                }
+            }
+            hideContextMenu(); // Close menu after action
+        };
+
+        const showContextMenu = (userId, userName, targetElement) => {
+            hideContextMenu(); 
+
+            const session = currentSessionData;
+            const user = session.users.find(u => u.id === userId);
+            if (!user) return; // Should not happen
+
+            const isSelf = userId === currentUser.id;
+            const userIsMod = session.moderatorIds && session.moderatorIds.includes(userId);
+            const userIsCreator = userId === session.creatorId;
+
+            const menu = document.createElement('div');
+            menu.id = 'participant-context-menu';
+            menu.className = 'absolute z-50 bg-dark-surface border border-dark-border rounded-md shadow-lg py-1 w-48';
+            menu.addEventListener('click', (e) => e.stopPropagation()); 
+
+            let menuHTML = '';
+
+            if (!isSelf && !userIsCreator) {
+                const modActionText = userIsMod ? t('demoteModerator') : t('promoteModerator');
+                const modAction = userIsMod ? 'demote' : 'promote';
+                menuHTML += `<button data-action="${modAction}" data-user-id="${userId}" data-user-name="${userName}" class="context-menu-btn block w-full text-left px-4 py-2 text-sm text-dark-text hover:bg-brand-primary hover:text-white">${modActionText}</button>`;
+            
+                menuHTML += `<button data-action="kick" data-user-id="${userId}" data-user-name="${userName}" class="context-menu-btn block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-600 hover:text-white">${t('kickParticipant')}</button>`;
+                menuHTML += `<div class="my-1 h-px bg-dark-border"></div>`;
+            }
+            
+            const roleActionText = user.role === 'spectator' ? t('makeParticipant') : t('makeSpectator');
+            const roleAction = user.role === 'spectator' ? 'setParticipant' : 'setSpectator';
+            menuHTML += `<button data-action="${roleAction}" data-user-id="${userId}" data-user-name="${userName}" class="context-menu-btn block w-full text-left px-4 py-2 text-sm text-dark-text hover:bg-brand-primary hover:text-white">${roleActionText}</button>`;
+
+            menu.innerHTML = menuHTML;
+            if(!menuHTML) return;
+
+            document.body.appendChild(menu);
+
+            const rect = targetElement.getBoundingClientRect();
+            menu.style.top = `${rect.bottom + window.scrollY}px`;
+            let leftPos = rect.left + window.scrollX;
+            if (leftPos + menu.offsetWidth > window.innerWidth) {
+                leftPos = window.innerWidth - menu.offsetWidth - 10;
+            }
+            menu.style.left = `${leftPos}px`;
+            
+            menu.addEventListener('click', handleContextMenuAction);
+            setTimeout(() => document.addEventListener('click', hideContextMenu), 0);
+        };
+        
+        // =================================================================================
+        // FIREBASE SERVICE FUNCTIONS
+        // =================================================================================
+        
+        const sendReaction = async (emoji) => {
+            if (!currentSessionId || !currentUser) return;
+            try {
+                const sessionRef = doc(db, 'sessions', currentSessionId);
+                const updatedUsers = currentSessionData.users.map(u => {
+                    if (u.id === currentUser.id) {
+                        const newReaction = u.reaction === emoji ? null : emoji;
+                        return { ...u, reaction: newReaction };
+                    }
+                    return u;
+                });
+                await updateDoc(sessionRef, { users: updatedUsers });
+            } catch (error) {
+                console.error("Error sending reaction:", error);
+            }
+        };
+
+        const listenToSession = (sessionId) => {
+            if (sessionUnsubscribe) sessionUnsubscribe();
+
+            sessionUnsubscribe = onSnapshot(doc(db, 'sessions', sessionId), (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    const oldAchievementsSet = new Set((currentSessionData?.achievements || []).map(a => a.id));
+
+                    currentSessionData = { id: docSnapshot.id, ...docSnapshot.data() };
+                    
+                    const newAchievements = (currentSessionData.achievements || []).filter(a => !oldAchievementsSet.has(a.id));
+                    if (newAchievements.length > 0) {
+                        newAchievements.forEach((ach, index) => {
+                            setTimeout(() => showAchievementToast(ach), index * 500); // Stagger toasts
+                        });
+                    }
+
+                    const userInSession = currentSessionData.users.find(u => u.id === currentUser.id);
+
+                    if (userInSession) {
+                        currentUser = userInSession;
+                        
+                        const activeParticipants = currentSessionData.users.filter(u => u.role !== 'spectator');
+                        const allVoted = activeParticipants.length > 0 && activeParticipants.every(u => u.vote !== null);
+                        const isModerator = currentSessionData.creatorId === currentUser.id || (currentSessionData.moderatorIds && currentSessionData.moderatorIds.includes(currentUser.id));
+                        const votingInProgress = currentSessionData.currentTicketTitle && !currentSessionData.votesRevealed;
+
+                        if (allVoted && votingInProgress && isModerator) {
+                            if (!window.revealTimeout) {
+                                window.revealTimeout = setTimeout(() => {
+                                    revealVotes();
+                                    window.revealTimeout = null;
+                                }, 3000);
+                            }
+                        } else if ((!allVoted || currentSessionData.votesRevealed) && window.revealTimeout) {
+                            clearTimeout(window.revealTimeout);
+                            window.revealTimeout = null;
+                        }
+
+                        renderSessionView(currentSessionData);
+
+                    } else {
+                        leaveSessionCleanup();
+                        renderError(t('errorKicked'));
+                    }
+                } else {
+                    leaveSessionCleanup();
+                    renderError(t('errorSessionDeleted'));
+                }
+            }, (error) => {
+                console.error("Error listening to session:", error);
+                leaveSessionCleanup();
+                renderError(t('errorConnectionLost'));
+            });
+        };
+        
+        const castVote = async (vote) => {
+            if(currentUser.role === 'spectator') return;
+
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+
+            const sessionData = sessionDoc.data();
+            const updatedUsers = sessionData.users.map(u => 
+                u.id === currentUser.id ? { ...u, vote, votedAt: vote ? Date.now() : null } : u
+            );
+            await updateDoc(sessionRef, { users: updatedUsers });
+        };
+        
+        const kickUser = async (userIdToKick) => {
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+
+            const sessionData = sessionDoc.data();
+            const userToKick = sessionData.users.find(u => u.id === userIdToKick);
+
+            if (userToKick) {
+                await updateDoc(sessionRef, {
+                    users: arrayRemove(userToKick)
+                });
+            }
+        };
+
+        const promoteUser = async (userIdToPromote) => {
+             const sessionRef = doc(db, 'sessions', currentSessionId);
+             await updateDoc(sessionRef, { moderatorIds: arrayUnion(userIdToPromote) });
+        };
+
+        const demoteUser = async (userIdToDemote) => {
+             const sessionRef = doc(db, 'sessions', currentSessionId);
+             await updateDoc(sessionRef, { moderatorIds: arrayRemove(userIdToDemote) });
+        };
+
+        const setUserRole = async (userId, role) => {
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+            const sessionData = sessionDoc.data();
+            const updatedUsers = sessionData.users.map(u => u.id === userId ? { ...u, role } : u);
+            await updateDoc(sessionRef, { users: updatedUsers });
+        };
+        
+        const resetVotes = async () => {
+             if (window.revealTimeout) {
+                clearTimeout(window.revealTimeout);
+                window.revealTimeout = null;
+            }
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+            
+            const sessionData = sessionDoc.data();
+            const resetUsers = sessionData.users.map(u => ({ ...u, vote: null, reaction: null, votedAt: null }));
+            await updateDoc(sessionRef, { 
+                users: resetUsers, 
+                votesRevealed: false,
+                discussionHighVoterId: null,
+                discussionLowVoterId: null,
+                revoteCount: (sessionData.revoteCount || 0) + 1,
+            });
+        };
+
+        const checkAndAwardAchievements = (sessionData) => {
+            const newAchievements = [];
+            const existingAchievementIds = new Set((sessionData.achievements || []).map(a => a.id));
+            const activeUsers = sessionData.users.filter(u => u.role !== 'spectator');
+            const voters = activeUsers.filter(u => u.vote !== null);
+            if (voters.length < 1 && activeUsers.length < 1) return [];
+
+            const votes = voters.map(u => u.vote);
+            const numericVoters = voters.filter(u => !isNaN(parseInt(u.vote, 10)));
+            const numericVotes = numericVoters.map(u => parseInt(u.vote, 10));
+
+            // Unanimity
+            if (votes.length > 1 && votes.every(v => v === votes[0])) {
+                const voteValue = votes[0];
+                const id = `unanimity_${String(voteValue).replace(/\s+/g, '_')}`;
+                if (!existingAchievementIds.has(id)) {
+                    newAchievements.push({id, icon: '🤝', title: t('achieveUnanimityTitle', { value: voteValue }), description: t('achieveUnanimityDesc', { value: voteValue }), timestamp: Date.now()});
+                }
+            }
+
+            // Wide Spread
+            if (numericVotes.length >= 2) {
+                const minVote = Math.min(...numericVotes);
+                const maxVote = Math.max(...numericVotes);
+                const deck = sessionData.cardValues.filter(v => !isNaN(parseInt(v, 10))).map(v => parseInt(v, 10)).sort((a,b) => a-b);
+                const minIndex = deck.indexOf(minVote);
+                const maxIndex = deck.indexOf(maxVote);
+                if (minIndex !== -1 && maxIndex !== -1 && (maxIndex - minIndex) >= 3) { // 3 or more steps apart
+                     const id = `wide_spread_${sessionData.currentTicketTitle}`;
+                     if (!existingAchievementIds.has(id)) {
+                         newAchievements.push({id, icon: '🤯', title: t('achieveWideSpreadTitle'), description: t('achieveWideSpreadDesc'), timestamp: Date.now()});
+                     }
+                }
+            }
+
+            // Coffee Break
+            const coffeeVotes = votes.filter(v => v === '☕').length;
+            if (voters.length > 0 && (coffeeVotes / voters.length) > 0.5) {
+                const id = `coffee_break_${sessionData.currentTicketTitle}`;
+                if (!existingAchievementIds.has(id)) {
+                    newAchievements.push({id, icon: '☕', title: t('achieveCoffeeBreakTitle'), description: t('achieveCoffeeBreakDesc'), timestamp: Date.now()});
+                }
+            }
+
+            // The Questioner
+            if (votes.length > 0 && votes.every(v => v === '?')) {
+                const id = `all_question_${sessionData.currentTicketTitle}`;
+                if (!existingAchievementIds.has(id)) {
+                    newAchievements.push({id, icon: '❓', title: t('achieveAllQuestionTitle'), description: t('achieveAllQuestionDesc'), timestamp: Date.now()});
+                }
+            }
+            
+            // Re-vote Master
+            if ((sessionData.revoteCount || 0) >= 1) {
+                 const id = `revote_master_${sessionData.currentTicketTitle}`;
+                 if (!existingAchievementIds.has(id)) {
+                    newAchievements.push({id, icon: '🔁', title: t('achieveRevoteTitle'), description: t('achieveRevoteDesc'), timestamp: Date.now()});
+                }
+            }
+
+            // Late to the Party
+            const nonVoters = activeUsers.filter(u => u.vote === null);
+            for (const user of nonVoters) {
+                const id = `missed_vote_${user.id}_${sessionData.currentTicketTitle}`;
+                if (!existingAchievementIds.has(id)) {
+                    newAchievements.push({id, icon: '⌛', title: t('achieveMissedVoteTitle', { name: user.name }), description: t('achieveMissedVoteDesc'), timestamp: Date.now()});
+                }
+            }
+
+            // Fast Fingers
+            const votersWithTimestamp = voters.filter(u => u.votedAt).sort((a,b) => a.votedAt - b.votedAt);
+            if (votersWithTimestamp.length > 0) {
+                const firstVoter = votersWithTimestamp[0];
+                const id = `fast_fingers_${firstVoter.id}_${sessionData.currentTicketTitle}`;
+                if (!existingAchievementIds.has(id)) {
+                    newAchievements.push({id, icon: '⚡', title: t('achieveFastFingersTitle', { name: firstVoter.name }), description: t('achieveFastFingersDesc'), timestamp: Date.now()});
+                }
+            }
+
+            // The Outlier
+            if (numericVoters.length >= 3) {
+                const uniqueNumericVotes = [...new Set(numericVotes)].sort((a, b) => a - b);
+                const minVote = uniqueNumericVotes[0];
+                const maxVote = uniqueNumericVotes[uniqueNumericVotes.length - 1];
+                const minVoters = numericVoters.filter(u => parseInt(u.vote, 10) === minVote);
+                const maxVoters = numericVoters.filter(u => parseInt(u.vote, 10) === maxVote);
+
+                if (minVoters.length === 1 && uniqueNumericVotes.length > 1 && (uniqueNumericVotes[1] - minVote) > (minVote / 2)) {
+                     const outlier = minVoters[0];
+                     const id = `outlier_${outlier.id}_${sessionData.currentTicketTitle}`;
+                     if (!existingAchievementIds.has(id)) {
+                        newAchievements.push({id, icon: '🔭', title: t('achieveOutlierTitle', { name: outlier.name }), description: t('achieveOutlierDesc'), timestamp: Date.now()});
+                    }
+                }
+                if (maxVoters.length === 1 && uniqueNumericVotes.length > 1 && (maxVote - uniqueNumericVotes[uniqueNumericVotes.length-2]) > (uniqueNumericVotes[uniqueNumericVotes.length-2] / 2)) {
+                     const outlier = maxVoters[0];
+                     const id = `outlier_${outlier.id}_${sessionData.currentTicketTitle}`;
+                     if (!existingAchievementIds.has(id)) {
+                        newAchievements.push({id, icon: '🔭', title: t('achieveOutlierTitle', { name: outlier.name }), description: t('achieveOutlierDesc'), timestamp: Date.now()});
+                    }
+                }
+            }
+
+
+            if (newAchievements.length > 0) {
+                activeSidebarTab = 'achievements';
+            }
+
+            return newAchievements;
+        };
+        
+        const revealVotes = async () => {
+            if (window.revealTimeout) {
+                clearTimeout(window.revealTimeout);
+                window.revealTimeout = null;
+            }
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+
+            const sessionData = sessionDoc.data();
+            const votes = sessionData.users.filter(u => u.role !== 'spectator').map(u => u.vote).filter(v => v && !isNaN(parseInt(v, 10)));
+            const numericVotes = votes.map(v => parseInt(v, 10));
+            const average = numericVotes.length > 0 ? (numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length).toFixed(1) : 'N/A';
+            
+            const newAchievements = checkAndAwardAchievements(sessionData);
+
+            const history = sessionData.history || [];
+            const historyIndex = history.findIndex(item => item.title === sessionData.currentTicketTitle);
+            
+            const newHistoryEntry = { title: sessionData.currentTicketTitle, result: average, timestamp: Date.now() };
+
+            if (historyIndex > -1) {
+                history[historyIndex] = newHistoryEntry;
+            } else {
+                history.push(newHistoryEntry);
+            }
+
+            await updateDoc(sessionRef, { 
+                votesRevealed: true,
+                history: history,
+                achievements: arrayUnion(...newAchievements)
+            });
+        };
+        
+        const startNewTicketRound = async (title) => {
+            if (!title) return;
+             if (window.revealTimeout) {
+                clearTimeout(window.revealTimeout);
+                window.revealTimeout = null;
+            }
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+
+            const sessionData = sessionDoc.data();
+            const resetUsers = sessionData.users.map(u => ({ ...u, vote: null, reaction: null, votedAt: null }));
+            const batch = writeBatch(db);
+            
+            const updatePayload = {
+                users: resetUsers,
+                votesRevealed: false,
+                currentTicketTitle: title,
+                discussionHighVoterId: null,
+                discussionLowVoterId: null,
+                revoteCount: 0,
+                lastDiscussionParticipantIds: [],
+            };
+
+            if (title && title === lastRandomName) {
+                const existingAchievements = sessionData.achievements || [];
+                const achievementId = `random_name_${currentUser.id}_${title.replace(/\s+/g, '_')}`;
+                const alreadyHasAchievement = existingAchievements.some(a => a.id === achievementId);
+
+                if (!alreadyHasAchievement) {
+                    const newAchievement = {
+                        id: achievementId,
+                        icon: '🎲',
+                        title: t('achieveRandomNameTitle'),
+                        description: t('achieveRandomNameDesc'),
+                        timestamp: Date.now()
+                    };
+                    updatePayload.achievements = arrayUnion(newAchievement);
+                    activeSidebarTab = 'achievements';
+                }
+            }
+
+            batch.update(sessionRef, updatePayload);
+            await batch.commit();
+            lastRandomName = null;
+        };
+        
+        const startNextTicket = async () => {
+             if (window.revealTimeout) {
+                clearTimeout(window.revealTimeout);
+                window.revealTimeout = null;
+            }
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+
+            const sessionData = sessionDoc.data();
+            const resetUsers = sessionData.users.map(u => ({ ...u, vote: null, reaction: null, votedAt: null }));
+            const batch = writeBatch(db);
+            batch.update(sessionRef, {
+                users: resetUsers,
+                votesRevealed: false,
+                currentTicketTitle: "",
+                discussionHighVoterId: null,
+                discussionLowVoterId: null,
+                revoteCount: 0,
+                lastDiscussionParticipantIds: [],
+            });
+            await batch.commit();
+        };
+
+        const startDiscussion = async () => {
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+
+            const sessionData = sessionDoc.data();
+            
+            const voters = sessionData.users.filter(u => u.role !== 'spectator' && u.vote !== null && !isNaN(parseInt(u.vote, 10)));
+            if (voters.length < 1) return;
+
+            const numericVotes = voters.map(u => parseInt(u.vote, 10));
+            const minVote = Math.min(...numericVotes);
+            const maxVote = Math.max(...numericVotes);
+
+            let highVoterId = null;
+            let lowVoterId = null;
+
+            if (minVote === maxVote) {
+                if (voters.length >= 2) {
+                    const shuffledVoters = voters.sort(() => 0.5 - Math.random());
+                    highVoterId = shuffledVoters[0].id;
+                    lowVoterId = shuffledVoters[1].id;
+                } else if (voters.length === 1) {
+                    highVoterId = voters[0].id;
+                    lowVoterId = voters[0].id;
+                }
+            } else {
+                const highVoters = voters.filter(u => parseInt(u.vote, 10) === maxVote);
+                const lowVoters = voters.filter(u => parseInt(u.vote, 10) === minVote);
+                
+                highVoterId = highVoters[Math.floor(Math.random() * highVoters.length)].id;
+                lowVoterId = lowVoters[Math.floor(Math.random() * lowVoters.length)].id;
+            }
+
+            const newAchievements = [];
+            const existingAchievementIds = new Set((sessionData.achievements || []).map(a => a.id));
+            const previousIds = sessionData.lastDiscussionParticipantIds || [];
+            const currentIds = [highVoterId, lowVoterId].filter(Boolean);
+
+            for (const userId of currentIds) {
+                if (userId && previousIds.includes(userId)) {
+                    const user = sessionData.users.find(u => u.id === userId);
+                    const id = `spotlight_${userId}_${sessionData.currentTicketTitle}`;
+                    if (user && !existingAchievementIds.has(id)) {
+                        newAchievements.push({
+                            id: id, icon: '🎯', title: t('achieveSpotlightTitle', { name: user.name }), 
+                            description: t('achieveSpotlightDesc'), timestamp: Date.now()
+                        });
+                    }
+                }
+            }
+
+            const updatePayload = {
+                discussionHighVoterId: highVoterId,
+                discussionLowVoterId: lowVoterId,
+                lastDiscussionParticipantIds: currentIds,
+            };
+            
+            if (newAchievements.length > 0) {
+                activeSidebarTab = 'achievements';
+                updatePayload.achievements = arrayUnion(...newAchievements);
+            }
+
+            await updateDoc(sessionRef, updatePayload);
+        };
+
+        const removeAchievement = async (achievementId) => {
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (!sessionDoc.exists()) return;
+
+            const sessionData = sessionDoc.data();
+            const achievementToRemove = (sessionData.achievements || []).find(a => a.id === achievementId);
+
+            if (achievementToRemove) {
+                 await updateDoc(sessionRef, {
+                    achievements: arrayRemove(achievementToRemove)
+                });
+            }
+        };
+
+        const leaveSession = async () => {
+             if (window.revealTimeout) {
+                clearTimeout(window.revealTimeout);
+                window.revealTimeout = null;
+            }
+            const sessionRef = doc(db, 'sessions', currentSessionId);
+            const sessionDoc = await getDoc(sessionRef);
+            if (sessionDoc.exists() && sessionDoc.data().users.length > 1) {
+                const userToRemove = sessionDoc.data().users.find(u => u.id === currentUser.id);
+                if (userToRemove) {
+                    await updateDoc(sessionRef, {
+                        users: arrayRemove(userToRemove)
+                    });
+                }
+            } else if (sessionDoc.exists()) {
+                 await deleteDoc(sessionRef);
+            }
+            leaveSessionCleanup();
+        };
+
+        // =================================================================================
+        // EVENT HANDLERS
+        // =================================================================================
+        createSessionForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            clearError();
+            const userName = document.getElementById('create-user-name').value.trim();
+            const sessionName = document.getElementById('create-session-name').value.trim();
+            
+            if (!userName || !sessionName) {
+                renderError(t('errorNameAndSessionName'));
+                return;
+            }
+
+            const selectedDeck = cardDeckSelect.value;
+            let cardValues;
+
+            if (selectedDeck === 'custom') {
+                const cardsStr = document.getElementById('custom-card-values').value.trim();
+                if (!cardsStr) {
+                    renderError(t('errorCustomDeckValues'));
+                    return;
+                }
+                cardValues = cardsStr.split(',').map(v => v.trim()).filter(Boolean);
+            } else {
+                cardValues = PREDEFINED_DECKS[selectedDeck];
+            }
+
+            if (!cardValues || cardValues.length === 0) {
+                 renderError(t('errorEmptyDeck'));
+                 return;
+            }
+
+            const creatorId = `user_${Date.now()}`;
+            currentUser = { id: creatorId, name: userName, vote: null, role: 'participant', reaction: null, votedAt: null };
+
+            try {
+                const newSessionRef = await addDoc(sessionsCollectionRef, {
+                    name: sessionName,
+                    users: [currentUser],
+                    creatorId: creatorId,
+                    moderatorIds: [],
+                    votesRevealed: false,
+                    cardValues: cardValues,
+                    currentTicketTitle: "",
+                    history: [],
+                    achievements: [],
+                    discussionHighVoterId: null,
+                    discussionLowVoterId: null,
+                    revoteCount: 0,
+                    lastDiscussionParticipantIds: [],
+                });
+                currentSessionId = newSessionRef.id;
+                sessionStorage.setItem(`user_${currentSessionId}`, JSON.stringify(currentUser));
+                window.location.hash = `/session/${currentSessionId}`;
+            } catch (err) {
+                console.error("Failed to create session:", err);
+                renderError(t('errorCreateSession'));
+            }
+        });
+
+        joinSessionForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            clearError();
+            const userName = document.getElementById('join-user-name').value.trim();
+            const sessionId = document.getElementById('join-session-id').value.trim();
+            
+            if (!userName || !sessionId) {
+                renderError(t('errorNameAndSessionId'));
+                return;
+            }
+
+            try {
+                const sessionRef = doc(db, 'sessions', sessionId);
+                const sessionDoc = await getDoc(sessionRef);
+
+                if (!sessionDoc.exists()) {
+                    renderError(t('errorSessionNotFound'));
+                    return;
+                }
+                
+                const tempUser = { name: userName, isJoining: true };
+                sessionStorage.setItem(`user_${sessionId}`, JSON.stringify(tempUser));
+                window.location.hash = `/session/${sessionId}`;
+
+            } catch (err) {
+                console.error("Failed to join session:", err);
+                renderError(t('errorJoinSession'));
+            }
+        });
+
+        cardDeckSelect.addEventListener('change', () => {
+            customCardValuesContainer.classList.toggle('hidden', cardDeckSelect.value !== 'custom');
+        });
+
+        document.getElementById('language-switcher').addEventListener('click', (e) => {
+            const target = e.target.closest('.lang-btn');
+            if (target && target.dataset.lang) {
+                const newLang = target.dataset.lang;
+                if (newLang !== currentLanguage) {
+                    currentLanguage = newLang;
+                    localStorage.setItem('pokerLanguage', newLang);
+                    updateAllText();
+                }
+            }
+        });
+
+        function attachSessionEventListeners() {
+            document.getElementById('copy-id-btn')?.addEventListener('click', () => {
+                navigator.clipboard.writeText(currentSessionId)
+                    .then(() => alert(t('idCopied')));
+            });
+
+            document.getElementById('random-name-btn')?.addEventListener('click', () => {
+                const ticketTitleInput = document.getElementById('ticket-title-input');
+                if (ticketTitleInput) {
+                    const names = FUNNY_TICKET_NAMES[currentLanguage] || FUNNY_TICKET_NAMES['en'];
+                    const randomName = names[Math.floor(Math.random() * names.length)];
+                    ticketTitleInput.value = randomName;
+                    lastRandomName = randomName;
+                }
+            });
+
+            document.getElementById('card-area')?.addEventListener('click', (e) => {
+                const card = e.target.closest('[data-vote]');
+                if (card) {
+                    const voteValue = card.dataset.vote;
+                    const newVote = currentUser.vote === voteValue ? null : voteValue;
+                    castVote(newVote);
+                }
+            });
+
+            document.getElementById('participants-panel')?.addEventListener('click', (e) => {
+                const participantItem = e.target.closest('.participant-item');
+                const isModerator = currentSessionData.creatorId === currentUser.id || (currentSessionData.moderatorIds && currentSessionData.moderatorIds.includes(currentUser.id));
+
+                if (participantItem && isModerator) {
+                    const userId = participantItem.dataset.userId;
+                    const userName = participantItem.dataset.userName;
+                    if (userId) {
+                       showContextMenu(userId, userName, participantItem);
+                    }
+                }
+            });
+
+            document.getElementById('sidebar-right')?.addEventListener('click', (e) => {
+                const tabButton = e.target.closest('.sidebar-tab');
+                if (tabButton) {
+                    activeSidebarTab = tabButton.dataset.tab;
+                    renderSessionView(currentSessionData); // Re-render to update tab state
+                }
+
+                const removeButton = e.target.closest('.remove-achievement-btn');
+                if (removeButton && confirm(t('confirmRemoveAchievement'))) {
+                    removeAchievement(removeButton.dataset.achievementId);
+                }
+            });
+
+            document.querySelector('.theme-selector-container')?.addEventListener('click', (e) => {
+                const themeButton = e.target.closest('.theme-btn');
+                if(themeButton) {
+                    const themeKey = themeButton.dataset.themeKey;
+                    if (themeKey && themeKey !== currentThemeKey) {
+                        currentThemeKey = themeKey;
+                        localStorage.setItem('pokerTheme', themeKey);
+                        if (currentSessionData) {
+                            renderSessionView(currentSessionData);
+                        }
+                    }
+                }
+            });
+
+            document.getElementById('emoji-reaction-bar')?.addEventListener('click', (e) => {
+                const button = e.target.closest('.emoji-reaction-btn');
+                if (button && button.dataset.emoji) {
+                    sendReaction(button.dataset.emoji);
+                }
+            });
+
+            document.getElementById('reveal-btn')?.addEventListener('click', (e) => {
+                if(e.target.disabled) return;
+                revealVotes();
+            });
+
+            document.getElementById('ticket-form')?.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const title = document.getElementById('ticket-title-input').value.trim();
+                if(title) startNewTicketRound(title);
+            });
+            
+            document.getElementById('start-discussion-btn')?.addEventListener('click', startDiscussion);
+            document.getElementById('revote-btn')?.addEventListener('click', resetVotes);
+            document.getElementById('next-ticket-btn')?.addEventListener('click', startNextTicket);
+            document.getElementById('leave-btn')?.addEventListener('click', leaveSession);
+        }
+        
+        function leaveSessionCleanup() {
+            if (sessionUnsubscribe) sessionUnsubscribe();
+            if (window.revealTimeout) {
+                clearTimeout(window.revealTimeout);
+                window.revealTimeout = null;
+            }
+            sessionStorage.removeItem(`user_${currentSessionId}`);
+            currentSessionId = null;
+            currentUser = null;
+            sessionUnsubscribe = null;
+            currentSessionData = null;
+            lastViewKey = ''; // Reset the view key for animations
+            activeSidebarTab = 'history';
+            lastRandomName = null;
+            window.location.hash = '/';
+        }
+
+        // =================================================================================
+        // ROUTER / MAIN LOGIC
+        // =================================================================================
+        const handleRouteChange = async () => {
+            clearError();
+            hideContextMenu();
+            const hash = window.location.hash;
+            const pathParts = hash.replace('#', '').split('/');
+
+            if (hash.startsWith('#/session/')) {
+                const sessionId = pathParts[2];
+                const storedUserStr = sessionStorage.getItem(`user_${sessionId}`);
+
+                if (!storedUserStr) {
+                    window.location.hash = '/';
+                    return;
+                }
+
+                currentSessionId = sessionId;
+                const storedUser = JSON.parse(storedUserStr);
+                
+                if (storedUser.isJoining) { 
+                    const newUserId = `user_${Date.now()}`;
+                    const newUser = { id: newUserId, name: storedUser.name, vote: null, role: 'participant', reaction: null, votedAt: null };
+                    try {
+                        const sessionRef = doc(db, 'sessions', sessionId);
+                        await updateDoc(sessionRef, { users: arrayUnion(newUser) });
+                        currentUser = newUser;
+                        sessionStorage.setItem(`user_${sessionId}`, JSON.stringify(newUser));
+                        listenToSession(sessionId);
+                        showView('session');
+                    } catch (err) {
+                        console.error("Failed to add user to session:", err);
+                        renderError(t('errorCouldNotJoin'));
+                        window.location.hash = '/';
+                    }
+                } else {
+                    currentUser = storedUser;
+                    listenToSession(sessionId);
+                    showView('session');
+                }
+            } else {
+                showView('lobby');
+            }
+        };
+
+        window.addEventListener('hashchange', handleRouteChange);
+        window.addEventListener('load', () => {
+            updateAllText();
+            handleRouteChange();
+            // Attach listener for the leave button once on load, since it's now part of the static DOM
+            document.getElementById('leave-btn')?.addEventListener('click', leaveSession);
+        });
+    </script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
